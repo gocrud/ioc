@@ -1,6 +1,6 @@
-## gocrud/di
+## gocrud/ioc
 
-`di` 是一个 Go 依赖注入框架，只提供 **Singleton** 一种生命周期：`ServiceCollection.Build()` 会一次性完成依赖图分析、循环依赖检测，并按依赖顺序把所有服务**提前构造好**；之后的 `Resolve`/`ResolveAll`/`ResolveKeyed` 只是读取已经构建好的值，不再有任何反射调用、锁或递归，因此解析接近 O(1)。
+`ioc` 是一个 Go 依赖注入框架，只提供 **Singleton** 一种生命周期：`ServiceCollection.Build()` 会一次性完成依赖图分析、循环依赖检测，并按依赖顺序把所有服务**提前构造好**；之后的 `Resolve`/`ResolveAll`/`ResolveKeyed` 只是读取已经构建好的值，不再有任何反射调用、锁或递归，因此解析接近 O(1)。
 
 核心类型：
 
@@ -40,7 +40,7 @@
 ### 1. 快速开始
 
 ```go
-import "github.com/gocrud/di"
+import "github.com/gocrud/ioc"
 
 type Logger interface{ Log(string) }
 type consoleLogger struct{}
@@ -53,7 +53,7 @@ type Repository struct{ Logger Logger }
 func NewRepository(logger Logger) *Repository { return &Repository{Logger: logger} }
 
 func main() {
-    sc := di.NewServiceCollection()
+    sc := ioc.NewServiceCollection()
     sc.AddSingleton[Logger](NewConsoleLogger)
     sc.AddSingleton[*Repository](NewRepository) // 依赖 Logger，构造顺序自动排在它之后
 
@@ -75,7 +75,7 @@ func main() {
 ### 2. 注册服务
 
 ```go
-sc := di.NewServiceCollection()
+sc := ioc.NewServiceCollection()
 
 sc.AddSingleton[Logger](NewConsoleLogger)     // 整个 provider 生命周期内只创建一次
 sc.AddSingleton[Repository](NewSqlRepository) // 依赖 Logger，构造顺序自动排在它之后
@@ -124,7 +124,7 @@ validators, err := provider.ResolveAll[Validator]() // 按注册顺序返回全�
 ```
 
 - `Resolve[T]`/`MustResolve[T]`/`ResolveAll[T]` 是 `*ServiceProvider` 上的泛型方法。
-- 未注册的服务返回 `di.ErrServiceNotRegistered`（可用 `errors.Is` 判断）。
+- 未注册的服务返回 `ioc.ErrServiceNotRegistered`（可用 `errors.Is` 判断）。
 - 由于所有实例都在 `Build()` 时已经构造好，这三个方法只是一次 map/切片查找，不会再触发任何构造、反射调用或加锁。
 
 ---
@@ -170,12 +170,12 @@ sc.Configure[AppConfig](func(c *AppConfig) { c.Port = 8080 })
 sc.Configure[AppConfig](func(c *AppConfig) { c.Port += 1 }) // 多次 Configure 按注册顺序依次应用
 
 provider, _ := sc.Build()
-opts := provider.MustResolve[*di.Options[AppConfig]]()
+opts := provider.MustResolve[*ioc.Options[AppConfig]]()
 fmt.Println(opts.Value.Port) // 8081
 ```
 
-- `Configure[T]` 收集针对同一个 `T` 的多个配置回调，在 `Build()` 时按注册顺序依次应用到一个零值 `T` 上，最终包装为 `*di.Options[T]{Value: T}`（Singleton）。
-- 消费方通过 `Resolve[*di.Options[T]]()`/`MustResolve[*di.Options[T]]()` 拿到配置结果，取 `.Value` 字段。
+- `Configure[T]` 收集针对同一个 `T` 的多个配置回调，在 `Build()` 时按注册顺序依次应用到一个零值 `T` 上，最终包装为 `*ioc.Options[T]{Value: T}`（Singleton）。
+- 消费方通过 `Resolve[*ioc.Options[T]]()`/`MustResolve[*ioc.Options[T]]()` 拿到配置结果，取 `.Value` 字段。
 - **注意**：必须在 `Build()` 之前调用 `Configure`；`Build()` 之后再调用不保证生效。
 
 #### OptionsMonitor：运行时可更新的配置
@@ -184,7 +184,7 @@ fmt.Println(opts.Value.Port) // 8081
 sc.ConfigureMonitor[AppConfig](func(c *AppConfig) { c.Port = 8080 })
 
 provider, _ := sc.Build()
-monitor := provider.MustResolve[*di.OptionsMonitor[AppConfig]]()
+monitor := provider.MustResolve[*ioc.OptionsMonitor[AppConfig]]()
 
 cancel := monitor.OnChange(func(c AppConfig) {
     fmt.Println("config changed, new port:", c.Port)
@@ -196,7 +196,7 @@ monitor.Set(AppConfig{Port: 9090})
 fmt.Println(monitor.CurrentValue().Port) // 9090
 ```
 
-- `ConfigureMonitor[T]` 与 `Configure[T]` 平行：`Build()` 时同样把已注册的回调按顺序应用到零值 `T` 上，作为**初始值**，包装成 Singleton `*di.OptionsMonitor[T]`（与 `*di.Options[T]` 是两个独立类型，可以同时注册同一个 `T`）。
+- `ConfigureMonitor[T]` 与 `Configure[T]` 平行：`Build()` 时同样把已注册的回调按顺序应用到零值 `T` 上，作为**初始值**，包装成 Singleton `*ioc.OptionsMonitor[T]`（与 `*ioc.Options[T]` 是两个独立类型，可以同时注册同一个 `T`）。
 - `OptionsMonitor[T]` 是**可变**的：`CurrentValue()` 无锁读取当前值；`OnChange(listener)` 注册回调并返回取消订阅函数；`Set(newValue)` 更新当前值并按注册顺序通知所有监听器。
 - **框架本身不会自动感知配置变化**：没有内置的文件/配置源 watch 机制，`Set` 必须由调用方在拿到新配置后主动调用（例如自己起一个 goroutine 监听文件变化）。本框架只提供“持有当前值 + 发布订阅”这一半机制，不提供“感知配置源变化”的机制。
 - 监听器的调用**不持有内部锁**，可以在监听器里安全地再次调用 `OnChange`/`Set`，但监听器本身仍需自行保证并发安全（多次 `Set` 之间没有互斥保证调用顺序与业务逻辑正确性）。
@@ -214,7 +214,7 @@ import (
     "os"
     "time"
 
-    "github.com/gocrud/di"
+    "github.com/gocrud/ioc"
 )
 
 type Logger interface {
@@ -243,7 +243,7 @@ func (l *timestampLogger) Log(message string) {
 }
 
 func main() {
-    services := di.NewServiceCollection()
+    services := ioc.NewServiceCollection()
     services.AddSingleton[Logger](NewConsoleLogger)
 
     // decorator 接收原始 Logger，并返回包装后的 Logger。
@@ -292,7 +292,7 @@ Go 没有真正的"扩展方法"，用桥接方法 + 函数值模拟 `services.A
 
 ```go
 // mypkg/httpclient.go —— 第三方/业务代码按约定编写的扩展函数
-func AddHttpClient(sc *di.ServiceCollection) *di.ServiceCollection {
+func AddHttpClient(sc *ioc.ServiceCollection) *ioc.ServiceCollection {
     sc.TryAddSingleton[*http.Client](func() *http.Client {
         return &http.Client{Timeout: 30 * time.Second}
     })
@@ -309,7 +309,7 @@ sc.AddSingleton[Logger](NewConsoleLogger).
 - 扩展函数只需要用到 `ServiceCollection` 已公开的方法（`AddSingleton`/`TryAddSingleton`/`Configure`/`Decorate` 等）即可实现，框架不提供任何内部/友元 API——**设计原则：所有注册能力必须可通过公开 API 组合实现**。
 - **注意**：若扩展函数自身需要独立类型参数（如 `AddDbContext[TContext any](sc, configure)`），因为 Go 泛型函数值不能隐式转换成非泛型的 `ServiceCollectionExtension`，需要用闭包包一层才能塞进 `.Extend()`：
   ```go
-  sc.Extend(func(sc *di.ServiceCollection) *di.ServiceCollection {
+    sc.Extend(func(sc *ioc.ServiceCollection) *ioc.ServiceCollection {
       return mypkg.AddDbContext[AppDbContext](sc, configure)
   })
   ```
@@ -323,7 +323,7 @@ sc.AddSingleton[Logger](NewConsoleLogger).
 ```go
 provider, err := sc.Build()
 if err != nil {
-    // 缺失依赖（ErrServiceNotRegistered）或循环依赖（*di.CircularDependencyError）
+    // 缺失依赖（ErrServiceNotRegistered）或循环依赖（*ioc.CircularDependencyError）
     // 都会在这里被发现，不需要额外的校验选项
     panic(err)
 }
@@ -332,7 +332,7 @@ if err != nil {
 `Build()` 内部分四步完成：
 
 1. **分配下标**：给每个注册（含 keyed）分配一个稳定的整数下标，构造函数的参数类型此时被静态解析成依赖下标，不再需要在运行时按类型查表。
-2. **建图 + 循环检测**：把每个构造函数（以及 Decorate 额外声明）的依赖边组织成有向图，做一次 DFS；发现环直接返回 `*di.CircularDependencyError`，`Error()` 会打印完整依赖链，如 `di: circular dependency detected: *di.A -> *di.B -> *di.A`，不会尝试调用任何构造函数。
+2. **建图 + 循环检测**：把每个构造函数（以及 Decorate 额外声明）的依赖边组织成有向图，做一次 DFS；发现环直接返回 `*ioc.CircularDependencyError`，`Error()` 会打印完整依赖链，如 `di: circular dependency detected: *ioc.A -> *ioc.B -> *ioc.A`，不会尝试调用任何构造函数。
 3. **拓扑排序**：DFS 得到的后序即构造顺序（依赖先于依赖方构造完成）。
 4. **按序真正构造**：依次调用每个构造函数（此时它的所有依赖都已经构造好，直接按下标取值传参），应用 Decorate 装饰链，并登记实现了 `io.Closer` 的实例。
 
@@ -343,7 +343,7 @@ type B struct{ A *A }
 sc.AddSingleton[*A](func(b *B) *A { return &A{B: b} })
 sc.AddSingleton[*B](func(a *A) *B { return &B{A: a} })
 
-_, err := sc.Build() // 直接返回 *di.CircularDependencyError，不会等到 Resolve 才发现
+_, err := sc.Build() // 直接返回 *ioc.CircularDependencyError，不会等到 Resolve 才发现
 ```
 
 - **默认就会校验全部注册项**：不管是缺失依赖还是循环依赖，只要 `Build()` 成功返回，就意味着所有服务都已经无错误地构造完成——没有"注册时看不出问题、用到才报错"的情况。
@@ -372,7 +372,7 @@ all, err := provider.ResolveAllKeyed[Cache]("redis")  // 该 key 下的全部注
 - **Keyed 注册与非 Keyed 注册是两套完全独立的空间**：`AddKeyedSingleton[Cache]("redis", ...)` 注册的实例，无法通过 `Resolve[Cache]()`/`MustResolve[Cache]()`/`ResolveAll[Cache]()` 解析到，反之亦然；即使 `key` 恰好是同一个类型也互不可见。
 - provider 形态与非 Keyed 注册完全一致（预构建实例 / 自动装配构造函数）；构造函数拿不到自己注册时用的 `key`。
 - **注意**：自动装配构造函数只能解析非 Keyed 依赖（按类型从容器解析）；Keyed 依赖只能通过 `provider.ResolveKeyed[Dep](key)` 在拿到 `*ServiceProvider` 之后手动取出，不能作为另一个自动装配构造函数的参数类型自动注入。
-- 未注册的 `(T, key)` 组合，`ResolveKeyed` 返回 `di.ErrServiceNotRegistered`；`MustResolveKeyed` 直接 panic；`ResolveAllKeyed` 返回空切片、无 error。
+- 未注册的 `(T, key)` 组合，`ResolveKeyed` 返回 `ioc.ErrServiceNotRegistered`；`MustResolveKeyed` 直接 panic；`ResolveAllKeyed` 返回空切片、无 error。
 - `Build()` 会同时校验 Keyed 与非 Keyed 的全部注册项。
 
 ---
@@ -382,9 +382,9 @@ all, err := provider.ResolveAllKeyed[Cache]("redis")  // 该 key 下的全部注
 ```go
 provider, err := sc.Build()
 if err != nil {
-    var circularErr *di.CircularDependencyError
+    var circularErr *ioc.CircularDependencyError
     switch {
-    case errors.Is(err, di.ErrServiceNotRegistered):
+    case errors.Is(err, ioc.ErrServiceNotRegistered):
         // 某个构造函数/decorator 依赖了一个从未注册的类型
     case errors.As(err, &circularErr):
         // circularErr.Chain 是完整依赖链，circularErr.Error() 形如
@@ -395,11 +395,11 @@ if err != nil {
     panic(err)
 }
 
-logger, err := provider.Resolve[Logger]() // 未注册也会返回 di.ErrServiceNotRegistered
+logger, err := provider.Resolve[Logger]() // 未注册也会返回 ioc.ErrServiceNotRegistered
 ```
 
-- 所有 `Resolve`/`ResolveKeyed` 系列的“未注册”错误都是对哨兵错误 `di.ErrServiceNotRegistered` 的包装，用 `errors.Is` 判断；`Build()` 阶段的同类错误同样如此。
-- 循环依赖用独立类型 `*di.CircularDependencyError` 表达（同时也满足 `errors.Is(err, di.ErrCircularDependency)`），额外携带 `Chain []reflect.Type` 字段供程序化处理或打印诊断信息。
+- 所有 `Resolve`/`ResolveKeyed` 系列的“未注册”错误都是对哨兵错误 `ioc.ErrServiceNotRegistered` 的包装，用 `errors.Is` 判断；`Build()` 阶段的同类错误同样如此。
+- 循环依赖用独立类型 `*ioc.CircularDependencyError` 表达（同时也满足 `errors.Is(err, ioc.ErrCircularDependency)`），额外携带 `Chain []reflect.Type` 字段供程序化处理或打印诊断信息。
 - `MustResolve`/`MustResolveKeyed` 遇到上述错误直接 `panic`，适合“预期一定已注册”的场景；不确定时用非 `Must` 版本处理 `error`。
 - 构造函数/decorator 自身返回的 `error` 会在 `Build()` 时被 `fmt.Errorf("di: constructing %s: %w", ...)`/`"di: decorating %s: %w"` 包装后原样返回，可以用 `errors.Unwrap`/`errors.Is` 取出原始错误。
 - 注册期的编程错误（provider 不是合法形态、签名不满足 `func(deps...) (T[, error])`、`Decorate` 目标未注册等）**直接 `panic`**，不通过 `error` 返回——这类错误应该在开发阶段就被发现，不需要在业务代码里处理。
@@ -416,7 +416,7 @@ import (
     "net/http"
     "time"
 
-    "github.com/gocrud/di"
+    "github.com/gocrud/ioc"
 )
 
 type Logger interface{ Log(string) }
@@ -432,7 +432,7 @@ func NewRepository(logger Logger) *Repository { return &Repository{Logger: logge
 type AppConfig struct{ Port int }
 
 func main() {
-    sc := di.NewServiceCollection()
+    sc := ioc.NewServiceCollection()
 
     sc.AddSingleton[Logger](NewConsoleLogger).
         AddSingleton[*Repository](NewRepository).
@@ -441,7 +441,7 @@ func main() {
         Decorate[Logger](func(inner Logger) (Logger, error) {
             return inner, nil // 示例：原样返回，真实场景可包装
         }).
-        Extend(func(sc *di.ServiceCollection) *di.ServiceCollection {
+        Extend(func(sc *ioc.ServiceCollection) *ioc.ServiceCollection {
             sc.TryAddSingleton[*http.Client](func() *http.Client {
                 return &http.Client{Timeout: 30 * time.Second}
             })
@@ -455,7 +455,7 @@ func main() {
     defer provider.Close()
 
     repo := provider.MustResolve[*Repository]()
-    opts := provider.MustResolve[*di.Options[AppConfig]]()
+    opts := provider.MustResolve[*ioc.Options[AppConfig]]()
     fmt.Println(repo, opts.Value.Port)
 }
 ```
